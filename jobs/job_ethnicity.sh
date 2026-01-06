@@ -33,10 +33,10 @@ singularity exec --nv \
     "${CONTAINER}" \
     python bias_neuron_src/1_analyze_mlm_bias.py \
         --data_path bias_neuron_data \
-        --demographic_dimension Ethnicity \
+        --demographic_dimension ethnicity \
         --demographic1 black \
         --demographic2 white \
-        --modifier negative \
+        --modifier N \
         --bert_model_path bert-base-uncased \
         --output_dir results/ethnicity \
         --do_lower_case \

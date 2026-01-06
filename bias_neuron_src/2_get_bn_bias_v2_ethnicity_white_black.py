@@ -6,8 +6,8 @@ import os
 threshold_ratio = 0.2
 mode_ratio_bag = 0.7
 mode_ratio_rel = 0.1
-bn_dir = '../bias_component_results_ori_v2/bn/'
-rlts_dir = '../bias_component_results_ori_v2/'
+bn_dir = 'results/ethnicity/bn/'
+rlts_dir = 'results/ethnicity/'
 
 
 def re_filter(metric_triplets):
