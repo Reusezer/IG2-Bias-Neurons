@@ -25,6 +25,13 @@ cd "${WORK_DIR}"
 source /etc/profile.d/modules.sh
 module load singularity/3.7.3
 
+# Install missing dependency
+echo "Installing jsonlines..."
+singularity exec --nv \
+    --bind "${WORK_DIR}:${WORK_DIR}" \
+    "${CONTAINER}" \
+    pip install --user jsonlines
+
 # Stage 1: Compute IG² scores
 echo "Stage 1: Computing Integrated Gradients..."
 singularity exec --nv \
