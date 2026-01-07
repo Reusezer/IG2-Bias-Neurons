@@ -25,20 +25,13 @@ cd "${WORK_DIR}"
 source /etc/profile.d/modules.sh
 module load singularity/3.7.3
 
-# Install missing dependency
-echo "Installing jsonlines..."
-singularity exec --nv \
-    --bind "${WORK_DIR}:${WORK_DIR}" \
-    "${CONTAINER}" \
-    pip install --user jsonlines
-
-# Stage 1: Compute IG² scores
-echo "Stage 1: Computing Integrated Gradients..."
+# Stage 1: Compute IG² scores (install dependency first)
+echo "Stage 1: Installing dependencies and computing Integrated Gradients..."
 singularity exec --nv \
     --bind "${WORK_DIR}:${WORK_DIR}" \
     --env HF_HOME="${WORK_DIR}/.cache/huggingface" \
     "${CONTAINER}" \
-    python bias_neuron_src/1_analyze_mlm_bias.py \
+    bash -c "pip install --user jsonlines && python bias_neuron_src/1_analyze_mlm_bias.py \
         --data_path bias_neuron_data \
         --demographic_dimension ethnicity \
         --demographic1 black \
@@ -51,14 +44,14 @@ singularity exec --nv \
         --get_ig2_gold \
         --get_base \
         --get_ig2_gold_gap_filtered \
-        --debug 24
+        --debug 24"
 
 # Stage 2: Extract bias neurons
 echo "Stage 2: Extracting bias neurons..."
 singularity exec --nv \
     --bind "${WORK_DIR}:${WORK_DIR}" \
     "${CONTAINER}" \
-    python bias_neuron_src/2_get_bn_bias_v2_ethnicity_white_black.py
+    bash -c "pip install --user jsonlines && python bias_neuron_src/2_get_bn_bias_v2_ethnicity_white_black.py"
 
 echo "=============================================="
 echo "Completed at: $(date)"
