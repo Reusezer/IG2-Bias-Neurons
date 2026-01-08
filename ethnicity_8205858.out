@@ -1,0 +1,32 @@
+==============================================
+Original IG2 - Ethnicity (Black/White) Analysis
+Job ID: 8205858
+Start: Thu Jan  8 22:17:06 JST 2026
+==============================================
+Stage 1: Installing dependencies and computing Integrated Gradients...
+Collecting jsonlines
+  Downloading jsonlines-4.0.0-py3-none-any.whl.metadata (1.6 kB)
+Requirement already satisfied: attrs>=19.2.0 in /opt/conda/lib/python3.10/site-packages (from jsonlines) (23.1.0)
+Downloading jsonlines-4.0.0-py3-none-any.whl (8.7 kB)
+Installing collected packages: jsonlines
+Successfully installed jsonlines-4.0.0
+/opt/conda/lib/python3.10/site-packages/transformers/utils/hub.py:111: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
+  warnings.warn(
+01/08/2026 22:17:26 - INFO - custom_bert_bias -   loading archive file https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased.tar.gz
+01/08/2026 22:17:26 - INFO - custom_bert_bias -   extracting archive file https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased.tar.gz to temp dir /tmp/tmpo_98yijy
+device: cuda:0 n_gpu: 1, distributed training: False
+***** CUDA.empty_cache() *****
+Traceback (most recent call last):
+  File "/work/gb20/b20117/IG2-Bias-Neurons/bias_neuron_src/1_analyze_mlm_bias.py", line 486, in <module>
+    main()
+  File "/work/gb20/b20117/IG2-Bias-Neurons/bias_neuron_src/1_analyze_mlm_bias.py", line 260, in main
+    model = BertForMaskedLM.from_pretrained(args.bert_model_path)
+  File "/work/gb20/b20117/IG2-Bias-Neurons/bias_neuron_src/custom_bert_bias.py", line 468, in from_pretrained
+    with tarfile.open(resolved_archive_file, 'r:gz') as archive:
+  File "/opt/conda/lib/python3.10/tarfile.py", line 1824, in open
+    return func(name, filemode, fileobj, **kwargs)
+  File "/opt/conda/lib/python3.10/tarfile.py", line 1870, in gzopen
+    fileobj = GzipFile(name, mode + "b", compresslevel, fileobj)
+  File "/opt/conda/lib/python3.10/gzip.py", line 174, in __init__
+    fileobj = self.myfileobj = builtins.open(filename, mode or 'rb')
+FileNotFoundError: [Errno 2] No such file or directory: 'https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased.tar.gz'

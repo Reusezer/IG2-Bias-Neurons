@@ -1,0 +1,23 @@
+{
+  "batch_size": 16,
+  "bert_model_path": "bert-base-uncased",
+  "data_path": "bias_neuron_data",
+  "debug": 24,
+  "demographic1": "black",
+  "demographic2": "white",
+  "demographic_dimension": "ethnicity",
+  "do_lower_case": true,
+  "get_base": true,
+  "get_ig2_gold": true,
+  "get_ig2_gold_filtered": false,
+  "get_ig2_gold_gap_filtered": true,
+  "get_ig2_pred": false,
+  "get_pred": false,
+  "gpus": "0",
+  "max_seq_length": 128,
+  "modifier": "N",
+  "no_cuda": false,
+  "num_batch": 10,
+  "output_dir": "results/ethnicity",
+  "seed": 42
+}

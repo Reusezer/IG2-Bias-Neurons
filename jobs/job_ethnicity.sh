@@ -31,7 +31,7 @@ singularity exec --nv \
     --bind "${WORK_DIR}:${WORK_DIR}" \
     --env HF_HOME="${WORK_DIR}/.cache/huggingface" \
     "${CONTAINER}" \
-    bash -c "pip install --user jsonlines && python bias_neuron_src/1_analyze_mlm_bias.py \
+    bash -c "pip install --user jsonlines safetensors huggingface_hub && python bias_neuron_src/1_analyze_mlm_bias.py \
         --data_path bias_neuron_data \
         --demographic_dimension ethnicity \
         --demographic1 black \
@@ -51,7 +51,7 @@ echo "Stage 2: Extracting bias neurons..."
 singularity exec --nv \
     --bind "${WORK_DIR}:${WORK_DIR}" \
     "${CONTAINER}" \
-    bash -c "pip install --user jsonlines && python bias_neuron_src/2_get_bn_bias_v2_ethnicity_white_black.py"
+    bash -c "pip install --user jsonlines safetensors huggingface_hub && python bias_neuron_src/2_get_bn_bias_v2_ethnicity_white_black.py"
 
 echo "=============================================="
 echo "Completed at: $(date)"

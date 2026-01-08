@@ -20,44 +20,52 @@ try:
     from transformers.file_utils import cached_path
 except ImportError:
     # For transformers >= 4.0, cached_path has been removed
-    # Implement a compatibility wrapper
-    import os
+    # Implement a compatibility wrapper using huggingface_hub
+    import re
     import urllib.request
     import hashlib
 
     def cached_path(url_or_filename, cache_dir=None):
         """
         Backward-compatible cached_path for transformers 4.x+
+        Downloads models using huggingface_hub
         """
-        # If it's a local file, return as-is
+        # If it's a local file/directory, return as-is
         if os.path.exists(url_or_filename):
             return url_or_filename
 
-        # For URLs, try modern huggingface_hub first
-        try:
-            from huggingface_hub import hf_hub_download
-            # Parse model name from old-style URL
-            if 'models.huggingface.co' in url_or_filename:
-                # This is an old URL format, just return model name
-                # The modern transformers will handle it automatically
-                return url_or_filename
-        except ImportError:
-            pass
+        # Extract model name from old S3 URL format
+        # e.g., https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased.tar.gz
+        if 'models.huggingface.co' in url_or_filename:
+            match = re.search(r'/([^/]+)\.tar\.gz$', url_or_filename)
+            if match:
+                model_name = match.group(1)
+                url_or_filename = model_name
+                logger.info(f"Extracted model name '{model_name}' from legacy URL")
 
-        # Try using cached_download from huggingface_hub
+        # Try using huggingface_hub to download the model
         try:
-            from huggingface_hub import cached_download
-            return cached_download(url_or_filename, cache_dir=cache_dir)
-        except (ImportError, Exception):
-            pass
+            from huggingface_hub import snapshot_download
+            if cache_dir is None:
+                cache_dir = os.path.join(os.path.expanduser('~'), '.cache', 'huggingface', 'hub')
 
-        # Fallback: simple download if it's a URL
+            logger.info(f"Downloading model '{url_or_filename}' via huggingface_hub...")
+            local_dir = snapshot_download(
+                repo_id=url_or_filename,
+                cache_dir=cache_dir,
+                local_files_only=False
+            )
+            logger.info(f"Model downloaded to: {local_dir}")
+            return local_dir
+        except Exception as e:
+            logger.warning(f"huggingface_hub download failed: {e}")
+
+        # Fallback: try direct URL download
         if url_or_filename.startswith('http://') or url_or_filename.startswith('https://'):
             if cache_dir is None:
                 cache_dir = os.path.join(os.path.expanduser('~'), '.cache', 'torch', 'transformers')
             os.makedirs(cache_dir, exist_ok=True)
 
-            # Create a filename from URL hash
             url_hash = hashlib.sha256(url_or_filename.encode()).hexdigest()[:8]
             cached_file = os.path.join(cache_dir, f'cached_{url_hash}')
 
@@ -67,7 +75,6 @@ except ImportError:
 
             return cached_file
 
-        # Last resort: return as-is
         return url_or_filename
 
 PRETRAINED_MODEL_ARCHIVE_MAP = {
@@ -468,15 +475,30 @@ class PreTrainedBertModel(nn.Module):
             with tarfile.open(resolved_archive_file, 'r:gz') as archive:
                 archive.extractall(tempdir)
             serialization_dir = tempdir
-        # Load config
+        # Load config (handle both old bert_config.json and modern config.json)
         config_file = os.path.join(serialization_dir, CONFIG_NAME)
+        if not os.path.exists(config_file):
+            config_file = os.path.join(serialization_dir, 'config.json')
         config = BertConfig.from_json_file(config_file)
         logger.info("Model config {}".format(config))
         # Instantiate model.
         model = cls(config, *inputs, **kwargs)
         if state_dict is None:
             weights_path = os.path.join(serialization_dir, WEIGHTS_NAME)
-            state_dict = torch.load(weights_path)
+            if not os.path.exists(weights_path):
+                # Try safetensors format
+                safetensors_path = os.path.join(serialization_dir, 'model.safetensors')
+                if os.path.exists(safetensors_path):
+                    try:
+                        from safetensors.torch import load_file
+                        state_dict = load_file(safetensors_path)
+                    except ImportError:
+                        logger.error("safetensors not installed. Install with: pip install safetensors")
+                        raise
+                else:
+                    raise FileNotFoundError(f"No weights file found in {serialization_dir}")
+            else:
+                state_dict = torch.load(weights_path)
 
         old_keys = []
         new_keys = []
