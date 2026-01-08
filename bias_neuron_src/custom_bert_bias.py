@@ -13,9 +13,62 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from transformers.file_utils import cached_path
-
 logger = logging.getLogger(__name__)
+
+# Compatibility fix for different transformers versions
+try:
+    from transformers.file_utils import cached_path
+except ImportError:
+    # For transformers >= 4.0, cached_path has been removed
+    # Implement a compatibility wrapper
+    import os
+    import urllib.request
+    import hashlib
+
+    def cached_path(url_or_filename, cache_dir=None):
+        """
+        Backward-compatible cached_path for transformers 4.x+
+        """
+        # If it's a local file, return as-is
+        if os.path.exists(url_or_filename):
+            return url_or_filename
+
+        # For URLs, try modern huggingface_hub first
+        try:
+            from huggingface_hub import hf_hub_download
+            # Parse model name from old-style URL
+            if 'models.huggingface.co' in url_or_filename:
+                # This is an old URL format, just return model name
+                # The modern transformers will handle it automatically
+                return url_or_filename
+        except ImportError:
+            pass
+
+        # Try using cached_download from huggingface_hub
+        try:
+            from huggingface_hub import cached_download
+            return cached_download(url_or_filename, cache_dir=cache_dir)
+        except (ImportError, Exception):
+            pass
+
+        # Fallback: simple download if it's a URL
+        if url_or_filename.startswith('http://') or url_or_filename.startswith('https://'):
+            if cache_dir is None:
+                cache_dir = os.path.join(os.path.expanduser('~'), '.cache', 'torch', 'transformers')
+            os.makedirs(cache_dir, exist_ok=True)
+
+            # Create a filename from URL hash
+            url_hash = hashlib.sha256(url_or_filename.encode()).hexdigest()[:8]
+            cached_file = os.path.join(cache_dir, f'cached_{url_hash}')
+
+            if not os.path.exists(cached_file):
+                logger.info(f"Downloading {url_or_filename} to {cached_file}")
+                urllib.request.urlretrieve(url_or_filename, cached_file)
+
+            return cached_file
+
+        # Last resort: return as-is
+        return url_or_filename
 
 PRETRAINED_MODEL_ARCHIVE_MAP = {
     'bert-base-uncased': "https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased.tar.gz",
