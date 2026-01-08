@@ -1,0 +1,20 @@
+==============================================
+Original IG2 - Ethnicity (Black/White) Analysis
+Job ID: 8203837
+Start: Thu Jan  8 05:15:26 JST 2026
+==============================================
+Stage 1: Installing dependencies and computing Integrated Gradients...
+Collecting jsonlines
+  Downloading jsonlines-4.0.0-py3-none-any.whl.metadata (1.6 kB)
+Requirement already satisfied: attrs>=19.2.0 in /opt/conda/lib/python3.10/site-packages (from jsonlines) (23.1.0)
+Downloading jsonlines-4.0.0-py3-none-any.whl (8.7 kB)
+Installing collected packages: jsonlines
+Successfully installed jsonlines-4.0.0
+/opt/conda/lib/python3.10/site-packages/transformers/utils/hub.py:111: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
+  warnings.warn(
+Traceback (most recent call last):
+  File "/work/gb20/b20117/IG2-Bias-Neurons/bias_neuron_src/1_analyze_mlm_bias.py", line 13, in <module>
+    from custom_bert_bias import BertForMaskedLM
+  File "/work/gb20/b20117/IG2-Bias-Neurons/bias_neuron_src/custom_bert_bias.py", line 16, in <module>
+    from transformers.file_utils import cached_path
+ImportError: cannot import name 'cached_path' from 'transformers.file_utils' (/opt/conda/lib/python3.10/site-packages/transformers/file_utils.py)
