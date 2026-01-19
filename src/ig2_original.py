@@ -8,9 +8,32 @@ For comparison with SignedIG² in proanti-SignedIG2.
 """
 
 import torch
+import torch.nn.functional as F
 import numpy as np
-from typing import Tuple, List, Optional
+from typing import Tuple, List
 from tqdm import tqdm
+
+
+def scaled_input(
+    activation: torch.Tensor,
+    num_steps: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Create scaled inputs for Riemann sum approximation.
+    Interpolates from zeros (baseline) to original activation.
+
+    Args:
+        activation: Original activation value [intermediate_size]
+        num_steps: Number of interpolation steps (m)
+
+    Returns:
+        scaled: Interpolated values [num_steps, intermediate_size]
+        step: Step size for Riemann sum [intermediate_size]
+    """
+    baseline = torch.zeros_like(activation)
+    step = (activation - baseline) / num_steps
+    scaled = torch.stack([baseline + step * k for k in range(1, num_steps + 1)], dim=0)
+    return scaled, step
 
 
 class OriginalIG2:
@@ -47,15 +70,18 @@ class OriginalIG2:
 
         # Get model architecture info
         if hasattr(model, 'bert'):
+            self.base_model = model.bert
             self.encoder = model.bert.encoder
-            self.num_layers = len(self.encoder.layer)
-            self.intermediate_size = self.encoder.layer[0].intermediate.dense.out_features
+            self.is_roberta = False
         elif hasattr(model, 'roberta'):
+            self.base_model = model.roberta
             self.encoder = model.roberta.encoder
-            self.num_layers = len(self.encoder.layer)
-            self.intermediate_size = self.encoder.layer[0].intermediate.dense.out_features
+            self.is_roberta = True
         else:
             raise ValueError("Model must have 'bert' or 'roberta' encoder")
+
+        self.num_layers = len(self.encoder.layer)
+        self.intermediate_size = self.encoder.layer[0].intermediate.dense.out_features
 
         self.model.eval()
         self.model.to(device)
@@ -68,32 +94,14 @@ class OriginalIG2:
             raise ValueError("No [MASK] token found in input")
         return mask_positions[0].item()
 
-    def _scaled_input(
-        self,
-        activation: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Create scaled inputs for Riemann sum approximation.
-        Interpolates from zeros (baseline) to original activation.
+    def _get_prediction_scores(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Get prediction scores from hidden states."""
+        if self.is_roberta:
+            return self.model.lm_head(hidden_states)
+        else:
+            return self.model.cls(hidden_states)
 
-        Args:
-            activation: Original FFN activation [1, seq_len, hidden_size]
-
-        Returns:
-            scaled: Interpolated activations [num_steps, seq_len, hidden_size]
-            step: Step size for Riemann sum
-        """
-        baseline = torch.zeros_like(activation)
-        step = (activation - baseline) / self.num_steps
-
-        # Create interpolation: α * activation for α in [1/m, 2/m, ..., 1]
-        scaled = torch.cat([
-            baseline + step * i for i in range(1, self.num_steps + 1)
-        ], dim=0)
-
-        return scaled, step[0]
-
-    def compute_ig2_for_label(
+    def compute_ig2_for_layer(
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor,
@@ -101,7 +109,10 @@ class OriginalIG2:
         layer_idx: int,
     ) -> torch.Tensor:
         """
-        Compute IG² score for a specific target label at a specific layer.
+        Compute IG² scores for all neurons in a layer for a specific target label.
+
+        This manually runs through transformer layers to properly maintain
+        the computation graph for gradient computation.
 
         Args:
             input_ids: Input token IDs [1, seq_len]
@@ -114,73 +125,84 @@ class OriginalIG2:
         """
         mask_pos = self._get_mask_position(input_ids)
 
-        # Hook to capture and modify FFN intermediate activations
-        activations = {}
-        gradients = {}
+        # Forward pass up to target layer (no grad needed)
+        with torch.no_grad():
+            embeddings = self.base_model.embeddings(input_ids)
+            hidden_states = embeddings
 
-        def forward_hook(module, input, output):
-            activations['ffn'] = output.detach().clone()
-            return output
+            # Create attention mask for transformer layers
+            extended_mask = attention_mask[:, None, None, :].to(dtype=hidden_states.dtype)
+            extended_mask = (1.0 - extended_mask) * -10000.0
 
-        def backward_hook(module, grad_input, grad_output):
-            gradients['ffn'] = grad_output[0].detach().clone()
+            # Run through layers up to target layer
+            for i in range(layer_idx):
+                layer_output = self.encoder.layer[i](hidden_states, extended_mask)
+                hidden_states = layer_output[0]
 
-        # Register hooks on FFN intermediate layer
-        layer = self.encoder.layer[layer_idx].intermediate.dense
-        fwd_handle = layer.register_forward_hook(forward_hook)
-        bwd_handle = layer.register_full_backward_hook(backward_hook)
+            # Get attention output for target layer
+            attn_output = self.encoder.layer[layer_idx].attention(hidden_states, extended_mask)[0]
 
-        try:
-            # Forward pass to get original activations
-            with torch.no_grad():
-                self.model(input_ids=input_ids, attention_mask=attention_mask)
+        # Get original intermediate activations at mask position
+        intermediate_module = self.encoder.layer[layer_idx].intermediate
+        with torch.no_grad():
+            original_intermediate = intermediate_module(attn_output)
+            # Shape: [1, seq_len, intermediate_size]
+            original_acts_at_mask = original_intermediate[0, mask_pos, :].clone()
 
-            original_activation = activations['ffn'].clone()  # [1, seq_len, intermediate_size]
+        # Create scaled activations for Riemann sum
+        # Shape: [num_steps, intermediate_size]
+        scaled_acts, step_sizes = scaled_input(original_acts_at_mask, self.num_steps)
 
-            # Create scaled inputs for Riemann sum
-            scaled_activations, step = self._scaled_input(original_activation)
+        # Accumulate gradients for each step
+        grad_sum = torch.zeros(self.intermediate_size, device=self.device)
 
-            # Accumulate gradients over all interpolation steps
-            ig2_accumulated = torch.zeros(self.intermediate_size, device=self.device)
+        for k in range(self.num_steps):
+            # Create input that requires grad for gradient computation
+            attn_output_grad = attn_output.clone().detach().requires_grad_(True)
 
-            for i in range(self.num_steps):
-                # Get the i-th scaled activation
-                scaled_act = scaled_activations[i:i+1]  # [1, seq_len, intermediate_size]
+            # Forward through intermediate
+            intermediate_out = intermediate_module(attn_output_grad)
 
-                # Create a new hook that replaces activation with scaled version
-                def replace_hook(module, input, output, replacement=scaled_act):
-                    return replacement
+            # Replace activations at mask position with scaled values
+            modified_intermediate = intermediate_out.clone()
+            modified_intermediate[0, mask_pos, :] = scaled_acts[k]
 
-                replace_handle = layer.register_forward_hook(replace_hook)
+            # Forward through output layer of this transformer block
+            output_module = self.encoder.layer[layer_idx].output
+            layer_output = output_module(modified_intermediate, attn_output_grad)
 
-                # Forward with scaled activation
-                self.model.zero_grad()
-                outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
-                logits = outputs.logits  # [1, seq_len, vocab_size]
+            # Forward through remaining layers
+            hidden_states_rest = layer_output
+            for i in range(layer_idx + 1, self.num_layers):
+                layer_out = self.encoder.layer[i](hidden_states_rest, extended_mask)
+                hidden_states_rest = layer_out[0]
 
-                # Get probability for target label at mask position
-                probs = torch.softmax(logits[0, mask_pos], dim=-1)
-                target_prob = probs[target_label_id]
+            # Get prediction scores
+            prediction_scores = self._get_prediction_scores(hidden_states_rest)
+            logits_at_mask = prediction_scores[0, mask_pos, :]
+            probs = F.softmax(logits_at_mask, dim=-1)
 
-                # Backward to get gradients
-                target_prob.backward()
+            # Target probability
+            target_prob = probs[target_label_id]
 
-                # Accumulate gradients at mask position
-                grad = gradients['ffn'][0, mask_pos, :]  # [intermediate_size]
-                ig2_accumulated += grad
+            # Compute gradients w.r.t. intermediate input
+            grad = torch.autograd.grad(
+                target_prob,
+                attn_output_grad,
+                retain_graph=False,
+                create_graph=False,
+            )[0]
 
-                replace_handle.remove()
+            # Sum gradients at mask position across hidden dimension
+            # This gives us the gradient contribution to intermediate neurons
+            grad_at_mask = grad[0, mask_pos, :]
+            grad_sum += grad_at_mask
 
-            # Compute final IG² score: w̄ · (1/m) · Σ gradients
-            # step already contains (activation - baseline) / num_steps
-            # So IG² = step * Σ gradients = w̄/m * Σ gradients
-            ig2_scores = step[mask_pos, :] * ig2_accumulated
+        # Compute final IG² score: w̄ · (1/m) · Σ gradients
+        # step_sizes = w̄/m, so IG² = step_sizes * grad_sum
+        ig2_scores = step_sizes * grad_sum
 
-            return ig2_scores
-
-        finally:
-            fwd_handle.remove()
-            bwd_handle.remove()
+        return ig2_scores
 
     def compute_ig2_gap(
         self,
@@ -234,16 +256,16 @@ class OriginalIG2:
 
         for layer_idx in layer_iter:
             # IG² for d1
-            ig2_d1_layer = self.compute_ig2_for_label(
+            ig2_d1_layer = self.compute_ig2_for_layer(
                 input_ids, attention_mask, d1_token_id, layer_idx
             )
-            ig2_d1[layer_idx] = ig2_d1_layer.cpu().numpy()
+            ig2_d1[layer_idx] = ig2_d1_layer.cpu().detach().numpy()
 
             # IG² for d2
-            ig2_d2_layer = self.compute_ig2_for_label(
+            ig2_d2_layer = self.compute_ig2_for_layer(
                 input_ids, attention_mask, d2_token_id, layer_idx
             )
-            ig2_d2[layer_idx] = ig2_d2_layer.cpu().numpy()
+            ig2_d2[layer_idx] = ig2_d2_layer.cpu().detach().numpy()
 
         # Compute gap
         ig2_gap = ig2_d1 - ig2_d2
